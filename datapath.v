@@ -1,0 +1,541 @@
+module datapath(xInput, yInput, loadDatapath, xOut, yOut, clk, resetLow, colorOut, oldOrCurrent, 
+		finishedPrintingSignal, collisionHappened, points);
+	input [7:0] xInput;
+	input [6:0] yInput;
+	input loadDatapath; //load enable signal
+	input clk;
+	input resetLow;
+	input oldOrCurrent;
+	output reg [7:0] points; //point tracking
+	output reg [7:0] xOut; // x coord to vga facilitator
+	output reg [6:0] yOut; // y coord to vga facilitator
+	output reg [2:0] colorOut;
+	output reg finishedPrintingSignal;
+	output collisionHappened;
+	reg [2:0] birdOrPipeOrCoin; //responsible for keeping track of whether bird calculation or pipe calculation in effect
+								// i.e if counting pixels for bird, this is 0, if pipe 1, its 1 etc.
+	
+	reg [7:0] x;
+	reg [6:0] y;
+	reg [3:0] count;
+	
+	reg [7:0] xPipe1;
+	reg [6:0] yPipe1;
+	reg [7:0] xPipe2;
+	reg [6:0] yPipe2;
+	reg [7:0] xPipe3;
+	reg [6:0] yPipe3;
+	
+	reg [4:0] countWidth;
+	reg [7:0] countHeight;
+	reg checkUpperPipeFinish; // check if upper part of pipe done
+
+	reg [2:0] colorBird;
+	reg [2:0] colorPipe;
+	reg [2:0] colorPoint;
+	
+	/*wire*/reg [2:0] speed;
+	initial speed = 3'd1;
+	
+	wire [7:0] height;
+	wire [4:0] width;
+	assign height = 8'd40; // height of the gap between pipe ends
+	assign width = 5'd6; // width of pipe
+	reg [4:0] pipeHeightIncrease;
+	
+	//crash checking
+	
+	wire collisionHappened1;
+	wire collisionHappened2;
+	wire collisionHappened3;
+	wire collisionHappened4;
+	
+	/*	Our difficulty setting, at the moment the speed doubles after getting 5 points, 
+		will probably make this higher later so that the game won't get too hard at an
+		early stage*/
+	always @(*)
+	begin
+		if (!resetLow)
+		begin
+			speed <= 3'd1;
+		end
+		else if (points >= 8'd20)
+		begin
+			speed <= 3'd3;
+		end
+		else if (points >= 8'd5)
+		begin
+			speed <= 3'd2;
+		end
+	end
+	
+	collisionPipe checkPipe1(
+		/*Inputs*/
+		.evaluateCollision(1'b1),
+		.xBird(xInput), 
+		.yBird(yInput), 
+		.xPipe(xPipe1), 
+		.yPipe(yPipe1), 
+		.clk(clk),
+		.resetLow(resetLow), 
+		.height(height), 
+		.width(width),
+		
+		/*Outputs*/
+		.collisionHappen(collisionHappened1)
+		);
+			
+	collisionPipe checkPipe2(
+		/*Inputs*/
+		.evaluateCollision(1'b1),
+		.xBird(xInput),
+		.yBird(yInput),
+		.xPipe(xPipe2), 
+		.yPipe(yPipe2), 
+		.clk(clk),
+		.resetLow(resetLow),
+		.height(height), 
+		.width(width),
+		
+		/*Outputs*/
+		.collisionHappen(collisionHappened2)
+		);
+			
+	collisionPipe checkPipe3(
+		/*Inputs*/
+		.evaluateCollision(1'b1),
+		.xBird(xInput),
+		.yBird(yInput),
+		.xPipe(xPipe3), 
+		.yPipe(yPipe3), 
+		.clk(clk),
+		.resetLow(resetLow), 
+		.height(height),
+		.width(width), 
+		
+		/*Outputs*/
+		.collisionHappen(collisionHappened3)
+		);
+			
+	collisionSurface checkSurface(
+		/*Inputs*/
+		.evaluateCollision(1'b1),
+		.yBird(yInput),
+		.resetLow(resetLow),
+		.clk(clk),
+		
+		/*Outputs*/
+		.crashHappen(collisionHappened_4)
+		);
+	
+	/*	Marks that a collision has happened if either of the previous modules
+		notes that a collision has happened on their end */
+	assign collisionHappened = collisionHappened1 | collisionHappened2 | collisionHappened3 | collisionHappened4;
+
+	always @(posedge clk)
+	begin
+		// Reset, low active
+		if (resetLow == 1'b0)
+		begin
+			x <= 8'd78;
+			y <= 7'd58;
+			xOut <= 8'd0;
+			yOut <= 7'd0;
+			xPipe1 <= 8'd135;
+			yPipe1 <= 7'd40;
+			xPipe2 <= 8'd20;
+			yPipe2 <= 7'd60;
+			xPipe3 <= 8'd60;
+			yPipe3 <= 7'd30;
+			points <= 8'd0;
+			countWidth <= 5'd0;
+			countHeight <= 8'd0;
+			checkUpperPipeFinish <= 1'd0;
+			colorBird <= 3'd0;
+			colorPipe <= 3'd0;
+			count <= 4'd0; //for pixel counting
+			finishedPrintingSignal <= 1'd0;
+			colorOut <= 3'd0;
+			
+		end
+		// Loading value for x and y, and set count to 0.
+		else if (loadDatapath == 1'b1)
+		begin
+				x <= xInput;
+				xOut <= xInput;
+				y <= yInput;
+				xOut <= yInput;
+				count <= 4'b0000;
+				finishedPrintingSignal <= 1'b0;
+				birdOrPipeOrCoin = 1'b0;
+				//+++++++++++PIPE UNO location++++++
+				if (oldOrCurrent == 1'b1)
+					if (xPipe1 - speed >= 8'd160) //boundary checking
+					begin
+						xPipe1 <= 8'd160/*8'd154*/;
+						yPipe1 <= 7'd30 + pipeHeightIncrease; //might be able to remove this line, comment out and see what happens
+					end
+					else
+					begin
+						if (!collisionHappened) //no crash occured
+						begin
+							if (xPipe1 + width >= 8'd78 && xPipe1 + width - speed < 8'd78) //score increase criteria, once u are in middle position of screen regarding x 
+								points <= points + 1;
+							xPipe1 <= xPipe1 - speed; // decrease the x coordinate by 1 (pipes move left as bird moves right)
+						end
+						else
+							xPipe1 <= xPipe1; // if collision happens stop movement
+					end
+				else
+					xPipe1 <= xPipe1;
+				//+++++++++++++++++PIPE DEUX location++++++++
+				if (oldOrCurrent == 1'b1)
+					if (xPipe2 - speed >= 8'd160)
+					begin
+						xPipe2 <= 8'd160;
+						yPipe2 <= 7'd20 + pipeHeightIncrease;
+					end
+					else
+					begin
+						if (!collisionHappened)
+						begin
+							if (xPipe2 + width >= 8'd78 && xPipe2 + width - speed < 8'd78)
+								points <= points + 1;
+							xPipe2 <= xPipe2 - speed;
+						end
+						else
+							xPipe2 <= xPipe2;
+					end
+				else
+					xPipe2 <= xPipe2;
+
+				//+++++++++++++PIPE TROIS location+++++++++++
+				if (oldOrCurrent == 1'b1)
+					if (xPipe3 - speed >= 8'd160)
+					begin
+						xPipe3 <= 8'd160;
+						yPipe3 <= 7'd40 + pipeHeightIncrease;
+					end
+					else
+					begin
+						if (!collisionHappened)
+						begin
+							if (xPipe3 + width >= 8'd78 && xPipe3 + width - speed < 8'd78)
+								points <= points + 1;
+							xPipe3 <= xPipe3 - speed;
+						end
+						else
+							xPipe3 <= xPipe3;
+					end
+				else
+					xPipe3 <= xPipe3;
+				
+				xOut <= 8'd0; // for pixel counting
+				yOut <= 7'd0; // for pixel counting
+				countWidth <= 5'd0;
+				countHeight <= 8'd0;
+				finishedPrintingSignal <= 1'b0;
+				checkUpperPipeFinish <= 1'b0;
+				//if dealing with old position of visuals we want to print clear colors as to prepare for new position for visuals
+				if (oldOrCurrent == 1'b0)
+				begin
+					colorBird <= 3'b000;
+					colorPipe <= 3'b000;
+					colorPoint <= 3'b000;
+				end
+				else
+				begin // dealing with current so not the erasure state, we gonna apply relevant colors for new positions of visuals
+					colorBird <= 3'b100;
+					colorPipe <= 3'b010;
+					colorPoint <= 3'b110;
+				end
+		end
+		// !!! PRINTING STAGES FOR BIRD, PIPES, AND COINS !!!
+		// BIRD PRINT (16 pixel count)
+		else if (birdOrPipeOrCoin == 3'b0)
+		begin
+			colorOut <= colorBird;
+			// counting.
+			if (count != 4'b1111)
+			begin
+				xOut <= x + count[3:2];
+				yOut <= y + count[1:0];
+				count <= count + 1'b1;
+			end
+			// Stay on the lower right pixel.
+			else
+			begin
+				xOut <= x + count[3:2];
+				yOut <= y + count[1:0];
+				birdOrPipeOrCoin = 3'd1;
+			end
+		end // bird print done ~~~~~~~
+		// !!!!!!!!!!!PIPE 1 PRINT !!!!!!!!!
+		else if (birdOrPipeOrCoin == 3'd1)
+		begin
+			colorOut <= colorPipe;
+			if (!checkUpperPipeFinish)
+			// Printing upper half of the pair of the pipes.
+			begin
+				if (countWidth != (width - 1) || yOut != 0) // Last px of the upper half.
+				begin
+					if (countWidth < width)
+					begin // Printing one row.
+						colorOut <= colorPipe;
+							
+						xOut <= xPipe1 + countWidth;
+						countWidth <= countWidth + 1'b1;
+						yOut <= yPipe1 - countHeight;
+					end
+					else
+					begin // One row of the pxs have been printed.
+						countWidth <= 0;
+						countHeight <= countHeight + 1;
+						xOut <= xPipe1;
+						yOut <= yPipe1 - countHeight;
+					end
+				end
+				else
+				begin // Finished printing upper half.
+					xOut <= xPipe1 + countWidth;
+					countWidth <= 0;
+					countHeight <= height;
+					checkUpperPipeFinish <= 1'b1;
+				end
+			end
+			// Stay on the lower right pixel.
+			else
+			// Printing lower half of the pair of the pipes.
+			begin
+				if (countWidth != (width - 1) || yOut != 119) // Last px of the upper half.
+				begin
+					if (countWidth < width)
+					begin // Printing one row.
+						xOut <= xPipe1 + countWidth;
+						countWidth <= countWidth + 1'b1;
+						yOut <= yPipe1 + countHeight;
+					end
+					else
+					begin // One row of the pxs have been printed.
+						countWidth <= 0;
+						countHeight <= countHeight + 1;
+						xOut <= xPipe1;
+						yOut <= yPipe1 + countHeight;
+					end
+				end
+				else
+				begin // Finished printing lower half.
+					xOut <= xPipe1 + countWidth;
+					checkUpperPipeFinish <= 1'b0;
+					countWidth <= 5'd0;
+					countHeight <= 8'd0;
+					count <= 4'b0000;
+					if (xPipe1 >= 8'd82)
+						birdOrPipeOrCoin <= 3'd4; // go to coin 1
+					else
+						birdOrPipeOrCoin <= 3'd2; // go to pipe 2
+				end
+			end
+		end //pipe 1 print done ~~~~
+		else if (birdOrPipeOrCoin == 3'd4)
+		begin //!!!!!!!!!!!!!!!!COIN 1 PRINT!!!!!!!!!!!!!!!!!!!!!
+			colorOut <= colorPoint;
+			// counting.
+			if (count != 4'b1111)
+			begin
+				xOut <= xPipe1 + count[3:2];
+				yOut <= yPipe1 + 7'd19 + count[1:0];
+				count <= count + 1'b1;
+			end
+			// Stay on the lower right pixel.
+			else
+			begin
+				xOut <= xPipe1 + count[3:2];
+				yOut <= yPipe1 + 7'd19 + count[1:0];
+				birdOrPipeOrCoin <= 3'd2;
+			end
+		end //coin 1 print done ~~~~~
+		// !!!!!!!!!!!!!!!!!!!!PIPE 2 PRINT!!!!!!!!!!!!!!!!!!!!!!!
+		else if (birdOrPipeOrCoin == 3'd2)
+		begin
+			colorOut <= colorPipe;
+			if (!checkUpperPipeFinish)
+			// Printing upper half of the pair of the pipes.
+			begin
+				if (countWidth != (width - 1) || yOut != 0) // Last px of the upper half.
+				begin
+					if (countWidth < width)
+					begin // Printing one row.
+						colorOut <= colorPipe;
+
+						xOut <= xPipe2 + countWidth;
+						countWidth <= countWidth + 1'b1;
+						yOut <= yPipe2 - countHeight;
+					end
+					else
+					begin // One row of the pxs have been printed.
+						countWidth <= 0;
+						countHeight <= countHeight + 1;
+						xOut <= xPipe2;
+						yOut <= yPipe2 - countHeight;
+					end
+				end
+				else
+				begin // Finished printing upper half.
+					xOut <= xPipe2 + countWidth;
+					countWidth <= 0;
+					countHeight <= height;
+					checkUpperPipeFinish <= 1'b1;
+				end
+			end
+			// Stay on the lower right pixel.
+			else
+			// Printing lower half of the pair of the pipes.
+			begin
+				if (countWidth != (width - 1) || yOut != 119) // Last px of the upper half.
+				begin
+					if (countWidth < width)
+					begin // Printing one row.
+						xOut <= xPipe2 + countWidth;
+						countWidth <= countWidth + 1'b1;
+						yOut <= yPipe2 + countHeight;
+					end
+					else
+					begin // One row of the pxs have been printed.
+						countWidth <= 0;
+						countHeight <= countHeight + 1;
+						xOut <= xPipe2;
+						yOut <= yPipe2 + countHeight;
+					end
+				end
+				else
+				begin // Finished printing lower half.
+					xOut <= xPipe2 + countWidth;	
+					checkUpperPipeFinish <= 1'b0;
+					countWidth <= 5'd0;
+					countHeight <= 8'd0;
+					count <= 4'b0000;
+					if (xPipe2 >= 8'd82)
+						birdOrPipeOrCoin <= 3'd5;
+					else
+						birdOrPipeOrCoin <= 3'd3;
+				end
+			end
+		end// PIPE 2 PRINT DONE ~~~~~~~~~~~
+		else if (birdOrPipeOrCoin == 3'd5)
+		begin //!!!!!!!!!!!!!!!!!!!!!COIN 2 PRINT!!!!!!!!!!!!!!!!!!!!!!
+			colorOut <= colorPoint;
+			// counting.
+			if (count != 4'b1111)
+			begin
+				xOut <= xPipe2 + count[3:2];
+				yOut <= yPipe2 + 7'd19 + count[1:0];
+				count <= count + 1'b1;
+			end
+			// Stay on the lower right pixel.
+			else
+			begin
+				xOut <= xPipe2 + count[3:2];
+				yOut <= yPipe2 + 7'd19 + count[1:0];
+				birdOrPipeOrCoin <= 3'd3;
+			end
+		end// COIN 2 PRINT DONE ~~~~~~~~~~
+		else if (birdOrPipeOrCoin == 3'd3)
+		begin //!!!!!!!!!!!!!!!!!!!!PIPE 3 PRINT!!!!!!!!!!!!!!!!!!!!!!!!!
+			colorOut <= colorPipe;
+			if (!checkUpperPipeFinish)
+			// Printing upper half of the pair of the pipes.
+			begin
+				if (countWidth != (width - 1) || yOut != 0) // Last px of the upper half.
+				begin
+					if (countWidth < width)
+					begin // Printing one row.
+						colorOut <= colorPipe;
+
+						xOut <= xPipe3 + countWidth;
+						countWidth <= countWidth + 1'b1;
+						yOut <= yPipe3 - countHeight;
+					end
+					else
+					begin // One row of the pxs have been printed.
+						countWidth <= 0;
+						countHeight <= countHeight + 1;
+						xOut <= xPipe3;
+						yOut <= yPipe3 - countHeight;
+					end
+				end
+				else
+				begin // Finished printing upper half.
+					xOut <= xPipe3 + countWidth;
+					countWidth <= 0;
+					countHeight <= height;
+					checkUpperPipeFinish <= 1'b1;
+				end
+			end
+			// Stay on the lower right pixel.
+			else
+			// Printing lower half of the pair of the pipes.
+			begin
+				if (countWidth != (width - 1) || yOut != 119) // Last px of the upper half.
+				begin
+					if (countWidth < width)
+					begin // Printing one row.
+						xOut <= xPipe3 + countWidth;
+						countWidth <= countWidth + 1'b1;
+						yOut <= yPipe3 + countHeight;
+					end
+					else
+					begin // One row of the pxs have been printed.
+						countWidth <= 0;
+						countHeight <= countHeight + 1;
+						xOut <= xPipe3;
+						yOut <= yPipe3 + countHeight;
+					end
+				end
+				else
+				begin // Finished printing lower half.
+					xOut <= xPipe3 + countWidth;	
+					checkUpperPipeFinish <= 1'b0;
+					countWidth <= 5'd0;
+					countHeight <= 8'd0;
+					count <= 4'b0000;
+					if (xPipe3 >= 8'd82)
+						birdOrPipeOrCoin <= 3'd6;
+					else
+						finishedPrintingSignal = 1'b1;
+				end
+			end
+		end // PIPE 3 DONE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+		else if (birdOrPipeOrCoin == 3'd6)
+		begin //!!!!!!!!!!!!!!!!!!!!!!!COIN 3 PRINT!!!!!!!!!!!!!!!!!!!!!!!!!!!
+			colorOut <= colorPoint;
+			// counting.
+			if (count != 4'b1111)
+			begin
+				xOut <= xPipe3 + count[3:2];
+				yOut <= yPipe3 + 7'd19 + count[1:0];
+				count <= count + 1'b1;
+			end
+			// Stay on the lower right pixel.
+			else
+			begin
+				xOut <= xPipe3 + count[3:2];
+				yOut <= yPipe3 + 7'd19 + count[1:0];
+				finishedPrintingSignal = 1'b1;
+			end
+		end // COIN 3 DONE ~~~~~~~~~~~~~~~
+	end //end for always 
+	
+	
+	// just needed for proper compilation, doesnt really have effect, kinda of like bandaid, needs re-evaluation
+	
+	always @(posedge clk)
+	begin
+		if (!resetLow)
+			pipeHeightIncrease <= 5'd0;
+		else
+			pipeHeightIncrease <= pipeHeightIncrease + 5'd15;
+	end
+
+
+endmodule
